@@ -1,0 +1,28 @@
+{
+  "name": "agent-sync",
+  "version": "0.1.0",
+  "description": "Migrate .claude (CLAUDE.md, skills) to the universal AGENTS.md + .agents/skills standard and wire every coding agent via symlinks — one source of truth, zero vendor lock-in.",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/clawnify/AgentSync.git" },
+  "keywords": ["agents.md", "claude", "claude-code", "codex", "cursor", "agent-skills", "symlink", "vendor-lock-in"],
+  "type": "module",
+  "bin": {
+    "agentsync": "dist/cli.js",
+    "agent-sync": "dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test test/*.test.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^7.0.2"
+  }
+}
