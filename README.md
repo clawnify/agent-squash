@@ -1,12 +1,14 @@
-# AgentSync
+# agent-squash
 
-**One source of truth for every coding agent. Zero vendor lock-in.**
+**Your coding agents argued over who owns the instructions file. Squash them onto one.**
+
+One source of truth for every coding agent. Symlinks, not copies. Zero vendor lock-in.
 
 You have `CLAUDE.md` and `.claude/skills/`. You want Codex, Cursor, Gemini CLI,
 OpenCode, Copilot, Zed, Amp — any agent — to see the same instructions and
 skills, without maintaining copies that drift apart.
 
-AgentSync keeps your Claude files as the real ones and makes every path the
+agent-squash keeps your Claude files as the real ones and makes every path the
 other agents read a symlink into them:
 
 ```
@@ -21,7 +23,7 @@ Add a rule or a skill in Claude and every agent has it. Nothing to regenerate.
 ## Global scope
 
 Each agent has its own global instructions file, and most of them shadow
-`~/.claude/CLAUDE.md` the moment they exist. `agentsync -g` turns them into links:
+`~/.claude/CLAUDE.md` the moment they exist. `agent-squash -g` turns them into links:
 
 ```
 ~/.config/opencode/AGENTS.md  -> ~/.claude/CLAUDE.md
@@ -56,22 +58,22 @@ the preamble. For Claude-only content longer than a few lines, prefer
 
 If a real `AGENTS.md`, `GEMINI.md`, or `~/.config/opencode/AGENTS.md` already
 exists and differs from `CLAUDE.md`, its content is appended to `CLAUDE.md`
-once, under a dated `<!-- agentsync: merged from ... -->` comment, and the file
+once, under a dated `<!-- agent-squash: merged from ... -->` comment, and the file
 becomes a symlink. Content from an agent's own file is wrapped in that agent's
 tag; a repo-root `AGENTS.md` has no single owner, so it is appended untagged
 for you to review. The original is kept as `.bak`. This is the only write
-AgentSync ever makes into `CLAUDE.md`.
+agent-squash ever makes into `CLAUDE.md`.
 
 ## Usage
 
 ```bash
-npx agent-sync                 # sync the current repo
-npx agent-sync -g              # sync the global scope
-npx agent-sync -a goose,roo    # also wire specific agents (default: agents detected on this machine)
-npx agent-sync --all           # wire every known agent
-npx agent-sync --adopt         # move skills out of a real dir that blocks a link, then link it
-npx agent-sync -n              # dry-run
-npx agent-sync -c              # verify links and tag syntax (exit 1 on drift — CI-friendly)
+npx agent-squash                 # sync the current repo
+npx agent-squash -g              # sync the global scope
+npx agent-squash -a goose,roo    # also wire specific agents (default: agents detected on this machine)
+npx agent-squash --all           # wire every known agent
+npx agent-squash --adopt         # move skills out of a real dir that blocks a link, then link it
+npx agent-squash -n              # dry-run
+npx agent-squash -c              # verify links and tag syntax (exit 1 on drift — CI-friendly)
 ```
 
 Run it in a repo, commit the symlinks (git tracks them natively), and every
@@ -100,7 +102,7 @@ collision that isn't an identical copy.
 
 ## Notes
 
-- **Windows**: directory symlinks need Developer Mode; AgentSync falls back to
+- **Windows**: directory symlinks need Developer Mode; agent-squash falls back to
   junctions automatically, which need no privileges. Git needs `core.symlinks=true`.
 - The Agent Skills format (`<name>/SKILL.md`) is an open standard — the same
   skill folders work everywhere. OpenCode validates only `name` and `description`,
