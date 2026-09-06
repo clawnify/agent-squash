@@ -16,6 +16,7 @@ AGENTS.md        -> CLAUDE.md        # Codex, Cursor, OpenCode, Zed, Amp, ... re
 GEMINI.md        -> CLAUDE.md        # Gemini CLI reads only GEMINI.md
 .agents/skills   -> .claude/skills   # Codex, Cursor, Gemini, Copilot, Zed, ... read .agents/skills natively
 .goose/skills    -> .agents/skills   # long-tail agents with their own dir get a symlink too
+.opencode/commands -> .claude/commands  # Markdown slash commands: OpenCode, Cursor
 ```
 
 Add a rule or a skill in Claude and every agent has it. Nothing to regenerate.
@@ -29,8 +30,31 @@ Each agent has its own global instructions file, and most of them shadow
 ~/.config/opencode/AGENTS.md  -> ~/.claude/CLAUDE.md
 ~/.codex/AGENTS.md            -> ~/.claude/CLAUDE.md
 ~/.gemini/GEMINI.md           -> ~/.claude/CLAUDE.md
-~/.agents/skills              -> ~/.claude/skills      # Codex reads it natively; OpenCode reads ~/.claude/skills directly
+~/.agents/skills              -> ~/.claude/skills      # Codex and Gemini read it natively; OpenCode reads ~/.claude/skills directly
+~/.config/opencode/commands   -> ~/.claude/commands
+~/.codex/prompts              -> ~/.claude/commands    # Codex custom prompts, invoked as /prompts:name
 ```
+
+## Slash commands
+
+There is no universal commands directory, but OpenCode, Cursor, and Codex read the
+same Markdown-with-front-matter files Claude Code does, with the same `$ARGUMENTS`
+and `$1` placeholders. Their command dirs are linked straight to `.claude/commands`.
+OpenCode ignores front matter keys it does not know, such as `allowed-tools`.
+
+Two caveats. Nested commands are named differently per agent (`/git:commit` in Claude
+Code, `git/commit` in OpenCode), so keep them flat. And every vendor is steering
+commands toward skills: Claude Code calls `.claude/commands` legacy, Codex marks
+custom prompts deprecated, Amp removed them. To reach the agents that only read
+skills (Gemini, Codex inside a repo, Amp, Copilot), run:
+
+```bash
+npx agent-squash --commands-to-skills   # .claude/commands/deploy.md -> .claude/skills/deploy/SKILL.md
+```
+
+Each converted command keeps `/deploy` in Claude Code and gets
+`disable-model-invocation: true` so it stays user-triggered. Commands whose name
+clashes with an existing skill, or that sit in a subdirectory, are left alone.
 
 ## Rules for one agent only
 
@@ -71,7 +95,8 @@ npx agent-squash                 # sync the current repo
 npx agent-squash -g              # sync the global scope
 npx agent-squash -a goose,roo    # also wire specific agents (default: agents detected on this machine)
 npx agent-squash --all           # wire every known agent
-npx agent-squash --adopt         # move skills out of a real dir that blocks a link, then link it
+npx agent-squash --adopt         # move skills/commands out of a real dir that blocks a link, then link it
+npx agent-squash --commands-to-skills   # turn flat commands into skills for agents without commands
 npx agent-squash -n              # dry-run
 npx agent-squash -c              # verify links and tag syntax (exit 1 on drift — CI-friendly)
 ```
@@ -79,8 +104,11 @@ npx agent-squash -c              # verify links and tag syntax (exit 1 on drift 
 Run it in a repo, commit the symlinks (git tracks them natively), and every
 teammate gets the same setup on pull. Run `--check` in CI to catch drift.
 
-`--check` also warns when `CLAUDE.md` passes 32 KiB, the point where Codex stops
-loading instruction files.
+`--check` also warns, without failing, about things Claude Code accepts but other
+agents silently drop: a skill without `name` or `description`, a SKILL.md that does
+not start with front matter, a name that is not lowercase-hyphen or differs from its
+directory, a command with a bare `model: opus` alias, and a `CLAUDE.md` past 32 KiB,
+where Codex stops loading instruction files.
 
 ## The guarantee
 
@@ -95,10 +123,11 @@ collision that isn't an identical copy.
 
 | | |
 |---|---|
-| **Read `AGENTS.md` + `.agents/skills` natively** | Codex, Cursor, GitHub Copilot, Amp, Zed, OpenCode, Warp, Cline, Antigravity |
+| **Read `AGENTS.md` + `.agents/skills` natively** | Codex, Cursor, GitHub Copilot, Amp, Zed, OpenCode, Warp, Cline, Antigravity. Gemini reads `.agents/skills` but needs `GEMINI.md` |
 | **Own global instructions file** | OpenCode (`~/.config/opencode/AGENTS.md`), Codex (`~/.codex/AGENTS.md`), Gemini CLI (`~/.gemini/GEMINI.md`) |
 | **Own instructions filename** | Gemini CLI (`GEMINI.md`) |
-| **Own skills dir (symlinked)** | Gemini CLI, Goose, Droid, Junie, Roo, Trae, Windsurf, Kilo, Kiro, Augment, Crush, Devin, Qwen, Grok, Hermes, AiderDesk |
+| **Markdown commands (linked)** | OpenCode (`.opencode/commands`), Cursor (`.cursor/commands`), Codex (`~/.codex/prompts`, global only) |
+| **Own skills dir (symlinked)** | Goose, Droid, Junie, Roo, Trae, Windsurf, Kilo, Kiro, Augment, Crush, Devin, Qwen, Grok, Hermes, AiderDesk |
 
 ## Notes
 

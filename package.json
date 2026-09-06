@@ -1,9 +1,11 @@
 {
   "name": "agent-squash",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One source of truth for every coding agent: CLAUDE.md and .claude/skills stay real, AGENTS.md, GEMINI.md, .agents/skills and every agent's global files become symlinks into them. Agent-scoped sections via <opencode> … </opencode> tags. Zero vendor lock-in.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/clawnify/agent-squash.git" },
+  "homepage": "https://github.com/clawnify/agent-squash#readme",
+  "bugs": "https://github.com/clawnify/agent-squash/issues",
   "keywords": ["agents.md", "opencode", "gemini-cli", "agent-squash", "claude", "claude-code", "codex", "cursor", "agent-skills", "symlink", "vendor-lock-in"],
   "type": "module",
   "bin": {
