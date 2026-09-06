@@ -33,6 +33,8 @@ export interface Layout {
   agentSkills: string[];
   /** agent Markdown command dirs that should point at claudeCommands (no universal dir exists) */
   agentCommands: string[];
+  /** names of the agents being wired, for agent-specific advice */
+  agentNames: string[];
 }
 
 export interface SyncOptions {
@@ -443,6 +445,13 @@ export function check(layout: Layout): CheckResult {
     pairs.push([universalSkills, claudeSkills]);
     for (const dir of agentSkills) pairs.push([dir, universalSkills]);
     result.warnings.push(...lintSkills(claudeSkills));
+    // OpenCode scans both .claude/skills and .agents/skills (sst/opencode skill/index.ts), so with the
+    // link it lists every skill twice and keeps the last. Its own switch turns off the .claude scan.
+    if (layout.agentNames.includes("opencode") && !process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS && !process.env.OPENCODE_DISABLE_CLAUDE_CODE) {
+      result.warnings.push(
+        `OpenCode reads both .claude/skills and .agents/skills, so it sees each skill twice (harmless: it logs a duplicate and keeps one). To read them once, set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 in your shell — but only if every repo you open in OpenCode has been synced, since it then ignores .claude/skills everywhere`,
+      );
+    }
   }
   if (existsSync(claudeCommands)) {
     for (const dir of agentCommands) pairs.push([dir, claudeCommands]);
