@@ -1,7 +1,7 @@
 {
   "name": "agent-sync",
-  "version": "0.1.0",
-  "description": "Migrate .claude (CLAUDE.md, skills) to the universal AGENTS.md + .agents/skills standard and wire every coding agent via symlinks — one source of truth, zero vendor lock-in.",
+  "version": "0.2.0",
+  "description": "One source of truth for every coding agent: CLAUDE.md and .claude/skills stay real, AGENTS.md, GEMINI.md, .agents/skills and every agent's global files become symlinks into them. Agent-scoped sections via <opencode> … </opencode> tags. Zero vendor lock-in.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/clawnify/AgentSync.git" },
   "keywords": ["agents.md", "claude", "claude-code", "codex", "cursor", "agent-skills", "symlink", "vendor-lock-in"],
