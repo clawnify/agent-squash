@@ -1,4 +1,4 @@
-# AgentSync
+# agent-squash
 
 A tiny CLI that wires every coding agent to one source of truth via symlinks.
 
