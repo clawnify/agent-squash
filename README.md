@@ -21,6 +21,23 @@ GEMINI.md        -> CLAUDE.md        # Gemini CLI reads only GEMINI.md
 
 Add a rule or a skill in Claude and every agent has it. Nothing to regenerate.
 
+## Monorepos: every directory, both directions
+
+Instruction files apply per directory, and in a large repo it only takes one directory
+with a `CLAUDE.md` and no `AGENTS.md` (or the reverse) for half the team to work
+without rules. agent-squash walks the whole tree. Every directory that has one of the
+two files gets the other as a link, whichever exists is the real one, and `--check`
+fails on any directory that has one without the other:
+
+```
+packages/api/CLAUDE.md          real   ->  packages/api/AGENTS.md links to it
+packages/web/AGENTS.md          real   ->  packages/web/CLAUDE.md links to it
+```
+
+Nested `.claude/skills` get their `.agents/skills` link too. Dot-directories,
+`node_modules`, and nested git checkouts are left alone. Claude Code cannot edit a
+file through a symlink, so in an `AGENTS.md`-first directory ask it to edit `AGENTS.md`.
+
 ## Global scope
 
 Each agent has its own global instructions file, and most of them shadow
@@ -85,27 +102,40 @@ exists and differs from `CLAUDE.md`, its content is appended to `CLAUDE.md`
 once, under a dated `<!-- agent-squash: merged from ... -->` comment, and the file
 becomes a symlink. Content from an agent's own file is wrapped in that agent's
 tag; a repo-root `AGENTS.md` has no single owner, so it is appended untagged
-for you to review. The original is kept as `.bak`. This is the only write
+for you to review. The original is kept as `.bak`.
+
+A `CLAUDE.md` that already imports `AGENTS.md` with `@AGENTS.md`, Claude Code's
+documented alternative to a link, is recognised and left alone: `AGENTS.md` is treated
+as the real file and only vendor files such as `GEMINI.md` are linked to it. This is the only write
 agent-squash ever makes into `CLAUDE.md`.
 
-## What about memory?
+## Shared local memory
 
-"Memory" is three different things, and agent-squash shares exactly one of them.
+Claude Code keeps auto memory per project: a `MEMORY.md` index plus one Markdown file
+per note, written by Claude as it learns. That format is plain enough to be the local
+memory every agent shares. Opt in per repo:
 
-- **Curated memory**: rules, skills, commands. Plain files a human edits. This is
-  what agent-squash links, and it works because every harness reads Markdown from
-  a path.
-- **Episodic memory**: what an agent learned on its own. Claude Code keeps Markdown
-  under `~/.claude/projects/<project>/memory/`, Codex keeps SQLite, Cursor keeps it
-  in the cloud, OpenCode has none. Different stores, each written by its own
-  harness, none readable by another. Not a symlink problem, so agent-squash leaves it alone.
-- **A memory service**: an MCP server exposing remember and recall tools. Every
-  harness that speaks MCP shares it, reads and writes included. This is the actual
-  "global memory layer." Each harness has its own MCP config format and its own
-  `mcp add` command, so you add the server once per harness, by hand.
+```bash
+npx agent-squash --memory
+```
 
-For notes a whole team should share, keep a Markdown file in the repo and point to
-it from `AGENTS.md`. That is curated memory, and it reaches everyone already.
+This uses Claude Code's documented `autoMemoryDirectory` setting rather than guessing
+where Claude keeps the files (that path is undocumented and has changed):
+
+```
+.claude/settings.json     autoMemoryDirectory: "~/.agents/memory/<repo>"   committed; same on every machine and worktree
+~/.agents/memory/<repo>   the store; existing Claude memory is moved here if found
+.agents/memory            -> the store; gitignored, since the target is machine-specific
+CLAUDE.md                 one marked block telling agents to read MEMORY.md and add notes
+```
+
+Claude Code loads the index automatically. Every other agent gets the block through
+the shared instructions and reads or writes the same files. Once set up, plain
+`npx agent-squash` maintains it and `--check` enforces it. Committing the setting
+relocates teammates' Claude memory for this repo too, which is why it is opt-in.
+
+Not covered: Codex's own SQLite memory and Cursor's cloud memory stay where they are,
+and a remote memory service is an MCP server you configure once per harness.
 
 ## Usage
 
@@ -116,6 +146,7 @@ npx agent-squash -a goose,roo    # also wire specific agents (default: agents de
 npx agent-squash --all           # wire every known agent
 npx agent-squash --adopt         # move skills/commands out of a real dir that blocks a link, then link it
 npx agent-squash --commands-to-skills   # turn flat commands into skills for agents without commands
+npx agent-squash --memory        # share Claude's local auto memory with every agent (repo scope)
 npx agent-squash -n              # dry-run
 npx agent-squash -c              # verify links and tag syntax (exit 1 on drift — CI-friendly)
 ```
@@ -133,7 +164,9 @@ where Codex stops loading instruction files.
 
 `CLAUDE.md` and `.claude/` stay real and stay where they are. Claude Code
 notices nothing, and can still edit its own file (it refuses to write through a
-symlink). Real files and directories are never clobbered: a directory in a
+symlink). The two exceptions are opt-in and documented: the one-time merge of a
+vendor file into `CLAUDE.md`, and `--memory`, which writes one setting to
+`.claude/settings.json`. Real files and directories are never clobbered: a directory in a
 link's way is reported as a conflict and left alone unless you pass `--adopt`,
 which *moves* its skills into `.claude/skills` and refuses on any name
 collision that isn't an identical copy.

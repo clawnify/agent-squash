@@ -282,3 +282,95 @@ test("-c hints at OpenCode's single-scan switch only when OpenCode is wired and 
   const other = run([root, "-c", "-a", "goose"]);
   assert.doesNotMatch(other.out, /OPENCODE_DISABLE/);
 });
+
+test("tree: every directory with one instructions file gets its twin; nested checkouts and node_modules are skipped", () => {
+  const root = fixture("t1");
+  mkdirSync(join(root, "packages/api/.claude/skills/api-skill"), { recursive: true });
+  writeFileSync(join(root, "packages/api/CLAUDE.md"), "# api rules\n");
+  writeFileSync(join(root, "packages/api/.claude/skills/api-skill/SKILL.md"), "---\nname: api-skill\ndescription: d\n---\n");
+  mkdirSync(join(root, "packages/web"), { recursive: true });
+  writeFileSync(join(root, "packages/web/AGENTS.md"), "# web rules (AGENTS.md-first team)\n");
+  mkdirSync(join(root, "node_modules/dep"), { recursive: true });
+  writeFileSync(join(root, "node_modules/dep/CLAUDE.md"), "vendored\n");
+  mkdirSync(join(root, "vendor/other-repo/.git"), { recursive: true });
+  writeFileSync(join(root, "vendor/other-repo/CLAUDE.md"), "another checkout\n");
+
+  const before = run([root, "-c"]);
+  assert.equal(before.code, 1, "a lone CLAUDE.md or AGENTS.md anywhere in the tree is drift");
+  assert.match(before.out, /packages\/api\/AGENTS\.md/);
+  assert.match(before.out, /packages\/web\/CLAUDE\.md/);
+
+  run([root]);
+  assert.equal(readlinkSync(join(root, "packages/api/AGENTS.md")), "CLAUDE.md");
+  assert.equal(readlinkSync(join(root, "packages/api/.agents/skills")), join("..", ".claude", "skills"));
+  assert.equal(readlinkSync(join(root, "packages/web/CLAUDE.md")), "AGENTS.md", "AGENTS.md-first dir gets the reverse link");
+  assert.equal(readFileSync(join(root, "packages/web/CLAUDE.md"), "utf8"), "# web rules (AGENTS.md-first team)\n");
+  assert.equal(existsSync(join(root, "node_modules/dep/AGENTS.md")), false);
+  assert.equal(existsSync(join(root, "vendor/other-repo/AGENTS.md")), false);
+  assert.equal(run([root, "-c"]).code, 0);
+});
+
+test("skills: a universal-first dir (.agents/skills real, no .claude/skills) gets .claude/skills linked to it", () => {
+  const root = tmp("t2");
+  mkdirSync(join(root, ".agents/skills/foo"), { recursive: true });
+  writeFileSync(join(root, "CLAUDE.md"), "# rules\n");
+  writeFileSync(join(root, ".agents/skills/foo/SKILL.md"), "---\nname: foo\ndescription: d\n---\n");
+  run([root]);
+  assert.equal(readlinkSync(join(root, ".claude/skills")), join("..", ".agents", "skills"));
+  assert.equal(readFileSync(join(root, ".claude/skills/foo/SKILL.md"), "utf8").includes("name: foo"), true);
+  assert.equal(run([root, "-c"]).code, 0);
+});
+
+test("--memory: documented setting, home store, link, gitignore, instruction block, migration; maintained afterwards", () => {
+  const home = tmp("home");
+  const root = join(home, "Codes", "myrepo");
+  mkdirSync(join(root, ".claude/skills/foo"), { recursive: true });
+  writeFileSync(join(root, "CLAUDE.md"), "# rules\n");
+  writeFileSync(join(root, ".gitignore"), "node_modules\n");
+  // Claude's current per-project memory for this repo, under the name rule seen in the wild
+  const oldMem = join(home, ".claude/projects", root.replace(/\//g, "-"), "memory");
+  mkdirSync(oldMem, { recursive: true });
+  writeFileSync(join(oldMem, "MEMORY.md"), "- [a fact](fact.md)\n");
+  writeFileSync(join(oldMem, "fact.md"), "a fact\n");
+
+  const res = run([root, "--memory"], { home });
+  assert.equal(res.code, 0, res.out);
+  const settings = JSON.parse(readFileSync(join(root, ".claude/settings.json"), "utf8"));
+  assert.equal(settings.autoMemoryDirectory, "~/.agents/memory/myrepo");
+  const store = join(home, ".agents/memory/myrepo");
+  assert.equal(readFileSync(join(store, "fact.md"), "utf8"), "a fact\n", "existing memory migrated");
+  assert.equal(existsSync(join(oldMem, "fact.md")), false, "moved, not copied");
+  assert.equal(readlinkSync(join(root, ".agents/memory")), join("..", "..", "..", ".agents", "memory", "myrepo"));
+  assert.equal(readFileSync(join(root, ".agents/memory/MEMORY.md"), "utf8"), "- [a fact](fact.md)\n");
+  assert.match(readFileSync(join(root, ".gitignore"), "utf8"), /^node_modules\n\.agents\/memory\n$/);
+  const claude = readFileSync(join(root, "CLAUDE.md"), "utf8");
+  assert.match(claude, /<!-- agent-squash:memory -->[\s\S]*\.agents\/memory\/MEMORY\.md[\s\S]*<!-- \/agent-squash:memory -->/);
+
+  const again = run([root], { home });
+  assert.doesNotMatch(again.out, /memory block appended|moved ->/, "idempotent without the flag once set up");
+  assert.equal(run([root, "-c"], { home }).code, 0);
+
+  writeFileSync(join(root, "CLAUDE.md"), "# rules\n");
+  const broken = run([root, "-c"], { home });
+  assert.equal(broken.code, 1);
+  assert.match(broken.out, /shared-memory block missing/);
+
+  const other = tmp("other-home");
+  const noGit = run(["-g", "--memory"], { home: other });
+  assert.equal(noGit.code, 2);
+});
+
+test("a CLAUDE.md that imports AGENTS.md (Claude's documented layout) is left alone, never merged into a self-import", () => {
+  const root = tmp("i1");
+  mkdirSync(root, { recursive: true });
+  writeFileSync(join(root, "AGENTS.md"), "# shared rules\n");
+  writeFileSync(join(root, "CLAUDE.md"), "@AGENTS.md\n\n## Claude Code\nUse plan mode.\n");
+  const res = run([root, "-a", "gemini"]);
+  assert.equal(res.code, 0, res.out);
+  assert.match(res.out, /already one source/);
+  assert.equal(readFileSync(join(root, "CLAUDE.md"), "utf8"), "@AGENTS.md\n\n## Claude Code\nUse plan mode.\n");
+  assert.equal(isLink(join(root, "AGENTS.md")), false);
+  assert.equal(existsSync(join(root, "AGENTS.md.bak")), false);
+  assert.equal(readlinkSync(join(root, "GEMINI.md")), "AGENTS.md", "vendor files still link to the real source");
+  assert.equal(run([root, "-c", "-a", "gemini"]).code, 0);
+});

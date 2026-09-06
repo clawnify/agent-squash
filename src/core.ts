@@ -4,6 +4,7 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { KNOWN_TAGS } from "./agents.js";
+import { applyMemory, checkMemory, memoryEnabled, type MemoryLayout } from "./memory.js";
 
 export interface Change {
   kind: "symlink" | "skip" | "conflict" | "merge" | "adopt";
@@ -22,19 +23,38 @@ export interface InstructionLink {
   tag?: string;
 }
 
+/** One directory's instructions: the real file and the vendor files that should link to it. */
+export interface InstructionSet {
+  source: string;
+  links: InstructionLink[];
+  /** set when the directory is already unified another way (CLAUDE.md imports AGENTS.md); nothing to link */
+  note?: string;
+}
+
+/**
+ * One directory's skills. Whichever of .claude/skills and .agents/skills is real is the source and
+ * the other becomes a link to it; agent-specific dirs always point at the universal .agents/skills.
+ */
+export interface SkillSet {
+  source: string;
+  link: string;
+  universal: string;
+  agentDirs: string[];
+}
+
 /** Everything one scope (repo or home) needs linked. Computed by the CLI, executed here. */
 export interface Layout {
-  claudeMd: string;
-  claudeSkills: string;
+  /** every directory in the tree that carries instructions, root first */
+  instructionSets: InstructionSet[];
+  /** every directory in the tree that carries .claude/skills, root first */
+  skillSets: SkillSet[];
   claudeCommands: string;
-  instructions: InstructionLink[];
-  universalSkills: string;
-  /** agent skills dirs that should point at universalSkills */
-  agentSkills: string[];
   /** agent Markdown command dirs that should point at claudeCommands (no universal dir exists) */
   agentCommands: string[];
   /** names of the agents being wired, for agent-specific advice */
   agentNames: string[];
+  /** shared local memory wiring; present only when --memory was asked for or is already set up */
+  memory?: MemoryLayout;
 }
 
 export interface SyncOptions {
@@ -42,6 +62,23 @@ export interface SyncOptions {
   adopt: boolean;
   /** move .claude/commands/<name>.md into .claude/skills/<name>/SKILL.md so agents without commands get them */
   commandsToSkills: boolean;
+  /** set up shared local memory (see memory.ts); once set up it is maintained on every run */
+  memory: boolean;
+}
+
+/** Link every vendor file in the set to its source, merging real ones first. */
+function syncInstructionSet(set: InstructionSet, dryRun: boolean, changes: Change[]): void {
+  for (const ins of set.links) {
+    if (existsSync(ins.path) && !isSymlink(ins.path)) {
+      mergeInstructions(set.source, ins, dryRun, changes);
+      if (dryRun) {
+        // the real file is still in the way during a dry run; report the link that would follow
+        changes.push({ kind: "symlink", path: ins.path, detail: `-> ${relative(dirname(ins.path), set.source)}` });
+        continue;
+      }
+    }
+    ensureSymlink(ins.path, set.source, dryRun, changes);
+  }
 }
 
 /** Codex stops loading instruction files once the combined chain reaches this. */
@@ -294,33 +331,25 @@ function commandsToSkills(commandsDir: string, skillsDir: string, dryRun: boolea
 export function runSync(layout: Layout, opts: SyncOptions): Plan {
   const changes: Change[] = [];
   const { dryRun, adopt } = opts;
-  const { claudeMd, claudeSkills, claudeCommands, instructions, universalSkills, agentSkills, agentCommands } = layout;
+  const { instructionSets, skillSets, claudeCommands, agentCommands } = layout;
 
-  if (existsSync(claudeMd)) {
-    for (const ins of instructions) {
-      if (existsSync(ins.path) && !isSymlink(ins.path)) {
-        mergeInstructions(claudeMd, ins, dryRun, changes);
-        if (dryRun) {
-          // the real file is still in the way during a dry run; report the link that would follow
-          changes.push({ kind: "symlink", path: ins.path, detail: `-> ${relative(dirname(ins.path), claudeMd)}` });
-          continue;
-        }
-      }
-      ensureSymlink(ins.path, claudeMd, dryRun, changes);
-    }
-  } else {
-    changes.push({ kind: "skip", path: claudeMd, detail: "not found — nothing to link instructions to" });
+  if (!instructionSets.length) changes.push({ kind: "skip", path: "instructions", detail: "no CLAUDE.md or AGENTS.md found" });
+  for (const set of instructionSets) {
+    if (set.note) changes.push({ kind: "skip", path: set.source, detail: set.note });
+    syncInstructionSet(set, dryRun, changes);
   }
 
-  if (opts.commandsToSkills) commandsToSkills(claudeCommands, claudeSkills, dryRun, changes);
+  if (opts.commandsToSkills && skillSets.length) commandsToSkills(claudeCommands, skillSets[0].source, dryRun, changes);
 
-  if (existsSync(claudeSkills)) {
-    ensureSymlink(universalSkills, claudeSkills, dryRun, changes, adopt);
-    for (const dir of agentSkills) ensureSymlink(dir, universalSkills, dryRun, changes, adopt);
-  } else if (existsSync(universalSkills) && !isSymlink(universalSkills)) {
-    changes.push({ kind: "skip", path: universalSkills, detail: "no .claude/skills; .agents/skills already real (universal-first setup)" });
-  } else {
-    changes.push({ kind: "skip", path: universalSkills, detail: "no skills found" });
+  if (!skillSets.length) changes.push({ kind: "skip", path: "skills", detail: "no .claude/skills found" });
+  for (const set of skillSets) {
+    ensureSymlink(set.link, set.source, dryRun, changes, adopt);
+    for (const dir of set.agentDirs) ensureSymlink(dir, set.universal, dryRun, changes, adopt);
+  }
+
+  if (layout.memory && (opts.memory || memoryEnabled(layout.memory))) {
+    const { ok } = applyMemory(layout.memory, dryRun, changes);
+    if (ok) ensureSymlink(layout.memory.link, layout.memory.target, dryRun, changes, adopt);
   }
 
   if (existsSync(claudeCommands)) {
@@ -432,19 +461,25 @@ export function lintCommands(commandsDir: string): string[] {
 
 /** Verify every expected link is in place and the shared files are well-formed. */
 export function check(layout: Layout): CheckResult {
-  const { claudeMd, claudeSkills, claudeCommands, instructions, universalSkills, agentSkills, agentCommands } = layout;
+  const { instructionSets, skillSets, claudeCommands, agentCommands } = layout;
   const result: CheckResult = { errors: [], warnings: [] };
   const pairs: Array<[string, string]> = [];
-  if (existsSync(claudeMd)) {
-    for (const ins of instructions) pairs.push([ins.path, claudeMd]);
-    const lint = lintInstructions(readFileSync(claudeMd, "utf8"), claudeMd);
+  for (const set of instructionSets) {
+    for (const ins of set.links) pairs.push([ins.path, set.source]);
+    const lint = lintInstructions(readFileSync(set.source, "utf8"), set.source);
     result.errors.push(...lint.errors);
     result.warnings.push(...lint.warnings);
   }
-  if (existsSync(claudeSkills)) {
-    pairs.push([universalSkills, claudeSkills]);
-    for (const dir of agentSkills) pairs.push([dir, universalSkills]);
-    result.warnings.push(...lintSkills(claudeSkills));
+  for (const set of skillSets) {
+    pairs.push([set.link, set.source]);
+    for (const dir of set.agentDirs) pairs.push([dir, set.universal]);
+    result.warnings.push(...lintSkills(set.source));
+  }
+  if (layout.memory && memoryEnabled(layout.memory)) {
+    result.errors.push(...checkMemory(layout.memory));
+    pairs.push([layout.memory.link, layout.memory.target]);
+  }
+  if (skillSets.length) {
     // OpenCode scans both .claude/skills and .agents/skills (sst/opencode skill/index.ts), so with the
     // link it lists every skill twice and keeps the last. Its own switch turns off the .claude scan.
     if (layout.agentNames.includes("opencode") && !process.env.OPENCODE_DISABLE_CLAUDE_CODE_SKILLS && !process.env.OPENCODE_DISABLE_CLAUDE_CODE) {

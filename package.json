@@ -1,6 +1,6 @@
 {
   "name": "agent-squash",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "One source of truth for every coding agent: CLAUDE.md and .claude/skills stay real, AGENTS.md, GEMINI.md, .agents/skills and every agent's global files become symlinks into them. Agent-scoped sections via <opencode> … </opencode> tags. Zero vendor lock-in.",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/clawnify/agent-squash.git" },
