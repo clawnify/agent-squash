@@ -10,7 +10,7 @@ const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
 
 const HELP = `
-agentsync — one source of truth for every coding agent
+agent-squash — your coding agents argued over the instructions file. Squash them onto one.
 
 CLAUDE.md and .claude/skills stay the real files. Everything else becomes a
 symlink into them, so a rule or skill added in Claude reaches every agent:
@@ -27,7 +27,7 @@ If a real vendor file already exists, its content is merged into CLAUDE.md once
 Scope a section to one agent by wrapping it: <opencode> ... </opencode>.
 
 Usage:
-  agentsync [options] [path]
+  agent-squash [options] [path]
 
 Options:
   -g, --global      sync the home scope instead of a repo

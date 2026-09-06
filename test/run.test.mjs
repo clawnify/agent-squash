@@ -10,7 +10,7 @@ const CLI = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "cli.js"
 const PREAMBLE_MARK = "apply only to that agent";
 
 function tmp(name) {
-  return join(mkdtempSync(join(tmpdir(), "agentsync-")), name);
+  return join(mkdtempSync(join(tmpdir(), "agent-squash-")), name);
 }
 
 /** A repo with CLAUDE.md and one Claude skill. */
@@ -74,7 +74,7 @@ test("real AGENTS.md is merged into CLAUDE.md untagged, backup kept, then linked
   assert.equal(readlinkSync(join(root, "AGENTS.md")), "CLAUDE.md");
   assert.equal(readFileSync(join(root, "AGENTS.md.bak"), "utf8"), "# old agents content\n");
   const claude = readFileSync(join(root, "CLAUDE.md"), "utf8");
-  assert.match(claude, /^# claude rules\n\n<!-- agentsync: merged from AGENTS\.md on \d{4}-\d{2}-\d{2}\. Review: keep, dedupe, or re-tag\. -->\n# old agents content\n$/);
+  assert.match(claude, /^# claude rules\n\n<!-- agent-squash: merged from AGENTS\.md on \d{4}-\d{2}-\d{2}\. Review: keep, dedupe, or re-tag\. -->\n# old agents content\n$/);
   assert.doesNotMatch(claude, /<[a-z]+>/, "shared AGENTS.md has no owner, so no tag");
   assert.doesNotMatch(claude, new RegExp(PREAMBLE_MARK), "no tags added, so no preamble");
 });

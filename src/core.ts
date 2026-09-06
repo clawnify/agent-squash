@@ -188,7 +188,7 @@ function mergeInstructions(claudeMd: string, incoming: InstructionLink, dryRun: 
   }
 
   const date = new Date().toISOString().slice(0, 10);
-  const note = `<!-- agentsync: merged from ${rel} on ${date}. Review: keep, dedupe, or re-tag. -->`;
+  const note = `<!-- agent-squash: merged from ${rel} on ${date}. Review: keep, dedupe, or re-tag. -->`;
   const block = incoming.tag ? `<${incoming.tag}>\n${body}\n</${incoming.tag}>` : body;
   let head = claude.trimEnd();
   if (incoming.tag && !head.includes(PREAMBLE_MARK)) head = `${PREAMBLE}\n\n${head}`;
