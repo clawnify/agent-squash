@@ -1,6 +1,7 @@
-# Publishes to npm on a version tag via trusted publishing (OIDC): no token, provenance attached.
-# One-time setup on npmjs.com: package settings -> Trusted publisher -> GitHub Actions,
-# owner clawnify, repository agent-squash, workflow release.yml.
+# Publishes to npm on a version tag with provenance attached.
+# Auth: npm tries trusted publishing (OIDC) first when a matching trusted publisher exists on
+# npmjs.com (owner clawnify, repository agent-squash, workflow release.yml), and otherwise falls
+# back to the NPM_TOKEN repository secret (a granular token with publish rights).
 name: Release
 on:
   push:
@@ -25,3 +26,5 @@ jobs:
       - name: Check tag matches package version
         run: test "v$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME}"
       - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
