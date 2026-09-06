@@ -268,3 +268,17 @@ test("-c warns on skills and commands other agents would drop", () => {
   assert.doesNotMatch(r.out, /ok\.md/);
   assert.doesNotMatch(r.out, /foo\/SKILL\.md/);
 });
+
+test("-c hints at OpenCode's single-scan switch only when OpenCode is wired and the switch is unset", () => {
+  const root = fixture("l3");
+  run([root, "-a", "opencode"]);
+  const withHint = run([root, "-c", "-a", "opencode"]);
+  assert.equal(withHint.code, 0);
+  assert.match(withHint.out, /OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1/);
+  const env = { ...process.env, HOME: tmp("empty-home"), OPENCODE_DISABLE_CLAUDE_CODE_SKILLS: "1" };
+  delete env.CLAUDE_CONFIG_DIR;
+  const silenced = spawnSync("node", [CLI, root, "-c", "-a", "opencode"], { encoding: "utf8", env });
+  assert.doesNotMatch(silenced.stdout + silenced.stderr, /OPENCODE_DISABLE/);
+  const other = run([root, "-c", "-a", "goose"]);
+  assert.doesNotMatch(other.out, /OPENCODE_DISABLE/);
+});

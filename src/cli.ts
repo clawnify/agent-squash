@@ -83,6 +83,7 @@ function repoLayout(root: string, agents: AgentConfig[]): Layout {
     universalSkills: join(root, UNIVERSAL_SKILLS_DIR),
     agentSkills: agents.filter((a) => a.skillsDir).map((a) => join(root, a.skillsDir!)),
     agentCommands: agents.filter((a) => a.commandsDir).map((a) => join(root, a.commandsDir!)),
+    agentNames: agents.map((a) => a.name),
   };
 }
 
@@ -96,6 +97,7 @@ function globalLayout(agents: AgentConfig[]): Layout {
     universalSkills: join(home, UNIVERSAL_SKILLS_DIR),
     agentSkills: agents.filter((a) => a.globalSkillsDir).map((a) => a.globalSkillsDir!),
     agentCommands: agents.filter((a) => a.globalCommandsDir).map((a) => a.globalCommandsDir!),
+    agentNames: agents.map((a) => a.name),
   };
 }
 
