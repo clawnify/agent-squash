@@ -133,6 +133,12 @@ collision that isn't an identical copy.
 
 - **Windows**: directory symlinks need Developer Mode; agent-squash falls back to
   junctions automatically, which need no privileges. Git needs `core.symlinks=true`.
+- **OpenCode sees skills twice.** It scans both `.claude/skills` and `.agents/skills`, so
+  with the link it finds every skill in two places, logs a duplicate internally, and keeps
+  one. Harmless. If you want a single scan, OpenCode's own switch
+  `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` turns off its `.claude` scan, but then it
+  ignores `.claude/skills` in repos you have not synced. `--check` reminds you of this
+  once when OpenCode is detected.
 - The Agent Skills format (`<name>/SKILL.md`) is an open standard — the same
   skill folders work everywhere. OpenCode validates only `name` and `description`,
   so Claude-only frontmatter fields should pass through; not verified for every agent.
