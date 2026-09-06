@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { createRequire } from "node:module";
-import { NON_UNIVERSAL_AGENTS, type AgentConfig } from "./agents.js";
-import { runSync, check, type Plan } from "./core.js";
+import { AGENTS, LINKED_AGENTS, UNIVERSAL_INSTRUCTIONS, UNIVERSAL_SKILLS_DIR, claudeHome, type AgentConfig } from "./agents.js";
+import { runSync, check, type Layout, type Plan } from "./core.js";
 
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json") as { version: string };
@@ -12,60 +12,89 @@ const pkg = require("../package.json") as { version: string };
 const HELP = `
 agentsync — one source of truth for every coding agent
 
-Keeps .claude/ and CLAUDE.md exactly as they are. Adds the universal,
-vendor-neutral paths every other agent reads:
+CLAUDE.md and .claude/skills stay the real files. Everything else becomes a
+symlink into them, so a rule or skill added in Claude reaches every agent:
 
-  AGENTS.md       -> CLAUDE.md        (Codex, Cursor, Zed, Amp, ... read it natively)
-  .agents/skills  -> .claude/skills   (Cursor, Codex, Gemini, Copilot, Zed, ... natively)
-  <agent>/skills  -> .agents/skills   (Goose, Roo, Junie, Windsurf, ... via symlink)
+  AGENTS.md, GEMINI.md          -> CLAUDE.md
+  .agents/skills                -> .claude/skills   (Codex, Cursor, OpenCode, ... read it natively)
+  <agent>/skills                -> .agents/skills   (Goose, Roo, Windsurf, ... via symlink)
 
-Claude Code notices nothing. If a real AGENTS.md already exists, CLAUDE.md
-overrides it on first sync (previous content saved as AGENTS.md.bak).
+  -g: ~/.config/opencode/AGENTS.md, ~/.codex/AGENTS.md, ~/.gemini/GEMINI.md -> ~/.claude/CLAUDE.md
+      ~/.agents/skills -> ~/.claude/skills
+
+If a real vendor file already exists, its content is merged into CLAUDE.md once
+(wrapped in that agent's tag when the file belongs to one agent) and kept as .bak.
+Scope a section to one agent by wrapping it: <opencode> ... </opencode>.
 
 Usage:
   agentsync [options] [path]
 
 Options:
-  -g, --global      sync the global scope (~/.claude -> ~/.agents)
-  -c, --check       verify existing links instead of creating them (exit 1 on drift)
+  -g, --global      sync the home scope instead of a repo
+  -c, --check       verify links and tag syntax instead of syncing (exit 1 on drift — CI-friendly)
   -n, --dry-run     show what would happen, change nothing
+      --adopt       move skills out of a real dir that is in a symlink's way, then link it
   -a, --agents x,y  also wire these agents (default: only agents detected on this machine)
-      --all         wire every known non-universal agent, detected or not
+      --all         wire every known agent, detected or not
   -h, --help        show this help
   -v, --version     show version
 
-Agents needing a symlink: ${NON_UNIVERSAL_AGENTS.map((a) => a.displayName).join(", ")}
-Universal agents (no symlink needed): Codex, Cursor, Gemini CLI, GitHub Copilot, Amp, Zed, OpenCode, Warp, Cline, Antigravity
+Agents: ${AGENTS.map((a) => a.displayName).join(", ")}
 `.trimEnd();
 
-/** Pick which non-universal agents to wire. claude-code is never an extra link. */
+function detected(a: AgentConfig): boolean {
+  const dirs = [...(a.detect ?? [])];
+  if (a.globalSkillsDir) dirs.push(dirname(a.globalSkillsDir));
+  if (a.globalInstructionsFile) dirs.push(dirname(a.globalInstructionsFile));
+  return dirs.some((d) => existsSync(d));
+}
+
+/** Pick which agents to wire. claude-code is the source, never a link. */
 function selectAgents(all: boolean, only: string[] | undefined): AgentConfig[] {
-  let list: AgentConfig[];
-  if (all) {
-    list = NON_UNIVERSAL_AGENTS;
-  } else {
-    const home = homedir();
-    list = NON_UNIVERSAL_AGENTS.filter(
-      (a) => existsSync(join(home, "." + a.name.split("-")[0])) || (a.globalSkillsDir && existsSync(a.globalSkillsDir))
-    );
-    if (only?.length) {
-      const wanted = new Set(only.map((s) => s.toLowerCase()));
-      const filtered = NON_UNIVERSAL_AGENTS.filter((a) => wanted.has(a.name) || wanted.has(a.displayName.toLowerCase()));
-      const unknown = [...wanted].filter((w) => !NON_UNIVERSAL_AGENTS.some((a) => a.name === w || a.displayName.toLowerCase() === w));
-      if (unknown.length) {
-        console.error(`unknown agent(s): ${unknown.join(", ")}\nknown: ${NON_UNIVERSAL_AGENTS.map((a) => a.name).join(", ")}`);
-        process.exit(2);
-      }
-      list = [...new Set([...list, ...filtered])];
+  if (all) return LINKED_AGENTS;
+  const list = LINKED_AGENTS.filter(detected);
+  if (only?.length) {
+    const wanted = new Set(only.map((s) => s.toLowerCase()));
+    const match = (a: AgentConfig, w: string) => a.name === w || a.tag === w || a.displayName.toLowerCase() === w;
+    const unknown = [...wanted].filter((w) => !LINKED_AGENTS.some((a) => match(a, w)));
+    if (unknown.length) {
+      console.error(`unknown agent(s): ${unknown.join(", ")}\nknown: ${LINKED_AGENTS.map((a) => a.name).join(", ")}`);
+      process.exit(2);
     }
+    for (const a of LINKED_AGENTS) if ([...wanted].some((w) => match(a, w)) && !list.includes(a)) list.push(a);
   }
-  return list.filter((a) => a.name !== "claude-code");
+  return list;
+}
+
+function repoLayout(root: string, agents: AgentConfig[]): Layout {
+  return {
+    claudeMd: join(root, "CLAUDE.md"),
+    claudeSkills: join(root, ".claude/skills"),
+    instructions: [
+      { path: join(root, UNIVERSAL_INSTRUCTIONS) },
+      ...agents.filter((a) => a.instructionsFile).map((a) => ({ path: join(root, a.instructionsFile!), tag: a.tag })),
+    ],
+    universalSkills: join(root, UNIVERSAL_SKILLS_DIR),
+    agentSkills: agents.filter((a) => a.skillsDir).map((a) => join(root, a.skillsDir!)),
+  };
+}
+
+function globalLayout(agents: AgentConfig[]): Layout {
+  const home = homedir();
+  return {
+    claudeMd: join(claudeHome(), "CLAUDE.md"),
+    claudeSkills: join(claudeHome(), "skills"),
+    instructions: agents.filter((a) => a.globalInstructionsFile).map((a) => ({ path: a.globalInstructionsFile!, tag: a.tag })),
+    universalSkills: join(home, UNIVERSAL_SKILLS_DIR),
+    agentSkills: agents.filter((a) => a.globalSkillsDir).map((a) => a.globalSkillsDir!),
+  };
 }
 
 function print(plan: Plan, dryRun: boolean): void {
+  const icons = { symlink: dryRun ? "◦" : "+", conflict: "!", skip: "=", merge: "~", adopt: ">" };
   for (const c of plan.changes) {
-    const icon = c.kind === "symlink" ? (dryRun ? "◦" : "+") : c.kind === "conflict" ? "!" : "=";
-    console.log(` ${icon} ${c.kind === "symlink" ? `link ${c.path} ${c.detail}` : `${c.path}: ${c.detail}`}`);
+    const verb = c.kind === "symlink" ? "link " : c.kind === "merge" ? "merge " : c.kind === "adopt" ? "adopt " : "";
+    console.log(` ${icons[c.kind]} ${verb}${c.path}${c.kind === "symlink" ? " " : ": "}${c.detail}`);
   }
 }
 
@@ -77,20 +106,18 @@ function main(): void {
   const dryRun = argv.includes("-n") || argv.includes("--dry-run");
   const isCheck = argv.includes("-c") || argv.includes("--check");
   const isGlobal = argv.includes("-g") || argv.includes("--global");
+  const adopt = argv.includes("--adopt");
   const all = argv.includes("--all");
   const agentsIdx = Math.max(argv.indexOf("-a"), argv.indexOf("--agents"));
   const only = agentsIdx !== -1 ? (argv[agentsIdx + 1] ?? "").split(",").filter(Boolean) : undefined;
-
-  const home = homedir();
-  // repo scope: root = positional path ?? cwd; canonical .claude is always inside root
-  // global scope: root = home, claude = ~/.claude
   const positional = argv.find((a, i) => !a.startsWith("-") && argv[i - 1] !== "-a" && argv[i - 1] !== "--agents");
-  const repoRoot = positional ?? process.cwd();
-  const root = isGlobal ? home : repoRoot;
-  const claudeDir = isGlobal ? join(home, ".claude") : join(repoRoot, ".claude");
+
+  const agents = selectAgents(all, only);
+  const layout = isGlobal ? globalLayout(agents) : repoLayout(positional ?? process.cwd(), agents);
 
   if (isCheck) {
-    const errors = check(root, claudeDir, selectAgents(all, only));
+    const { errors, warnings } = check(layout);
+    for (const w of warnings) console.error(` ? ${w}`);
     if (errors.length) {
       console.error(`drift detected (${errors.length}):\n${errors.map((e) => ` ! ${e}`).join("\n")}`);
       process.exit(1);
@@ -99,12 +126,12 @@ function main(): void {
     return;
   }
 
-  const plan = runSync({ root, claudeDir, extraAgents: selectAgents(all, only), dryRun });
+  const plan = runSync(layout, { dryRun, adopt });
   print(plan, dryRun);
-  const conflicts = plan.changes.filter((c) => c.kind === "conflict").length;
-  const created = plan.changes.filter((c) => c.kind === "symlink").length;
-  console.log(`\n${dryRun ? "would " : ""}create ${created} link(s), ${conflicts} conflict(s). Run with -c anytime to verify.`);
-  if (conflicts > 0 && !dryRun) process.exitCode = 1;
+  const count = (k: string) => plan.changes.filter((c) => c.kind === k).length;
+  const summary = [`${count("symlink")} link(s)`, count("merge") && `${count("merge")} merge(s)`, count("adopt") && `${count("adopt")} adoption(s)`, `${count("conflict")} conflict(s)`].filter(Boolean).join(", ");
+  console.log(`\n${dryRun ? "would " : ""}${dryRun ? "make" : "made"}: ${summary}. Run with -c anytime to verify.`);
+  if (count("conflict") > 0 && !dryRun) process.exitCode = 1;
 }
 
 main();
