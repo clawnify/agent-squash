@@ -16,11 +16,13 @@ CLAUDE.md and .claude/skills stay the real files. Everything else becomes a
 symlink into them, so a rule or skill added in Claude reaches every agent:
 
   AGENTS.md, GEMINI.md          -> CLAUDE.md
-  .agents/skills                -> .claude/skills   (Codex, Cursor, OpenCode, ... read it natively)
-  <agent>/skills                -> .agents/skills   (Goose, Roo, Windsurf, ... via symlink)
+  .agents/skills                -> .claude/skills    (Codex, Cursor, Gemini, OpenCode, ... read it natively)
+  <agent>/skills                -> .agents/skills    (Goose, Roo, Windsurf, ... via symlink)
+  <agent>/commands              -> .claude/commands  (OpenCode, Cursor; Markdown slash commands)
 
   -g: ~/.config/opencode/AGENTS.md, ~/.codex/AGENTS.md, ~/.gemini/GEMINI.md -> ~/.claude/CLAUDE.md
       ~/.agents/skills -> ~/.claude/skills
+      ~/.config/opencode/commands, ~/.codex/prompts -> ~/.claude/commands
 
 If a real vendor file already exists, its content is merged into CLAUDE.md once
 (wrapped in that agent's tag when the file belongs to one agent) and kept as .bak.
@@ -31,9 +33,12 @@ Usage:
 
 Options:
   -g, --global      sync the home scope instead of a repo
-  -c, --check       verify links and tag syntax instead of syncing (exit 1 on drift — CI-friendly)
+  -c, --check       verify links and tag syntax (exit 1 on drift — CI-friendly); warns on skills/commands
+                    other agents would silently drop
   -n, --dry-run     show what would happen, change nothing
-      --adopt       move skills out of a real dir that is in a symlink's way, then link it
+      --adopt       move skills/commands out of a real dir that is in a symlink's way, then link it
+      --commands-to-skills
+                    turn flat .claude/commands/*.md into skills so agents without commands get them
   -a, --agents x,y  also wire these agents (default: only agents detected on this machine)
       --all         wire every known agent, detected or not
   -h, --help        show this help
@@ -70,12 +75,14 @@ function repoLayout(root: string, agents: AgentConfig[]): Layout {
   return {
     claudeMd: join(root, "CLAUDE.md"),
     claudeSkills: join(root, ".claude/skills"),
+    claudeCommands: join(root, ".claude/commands"),
     instructions: [
       { path: join(root, UNIVERSAL_INSTRUCTIONS) },
       ...agents.filter((a) => a.instructionsFile).map((a) => ({ path: join(root, a.instructionsFile!), tag: a.tag })),
     ],
     universalSkills: join(root, UNIVERSAL_SKILLS_DIR),
     agentSkills: agents.filter((a) => a.skillsDir).map((a) => join(root, a.skillsDir!)),
+    agentCommands: agents.filter((a) => a.commandsDir).map((a) => join(root, a.commandsDir!)),
   };
 }
 
@@ -84,9 +91,11 @@ function globalLayout(agents: AgentConfig[]): Layout {
   return {
     claudeMd: join(claudeHome(), "CLAUDE.md"),
     claudeSkills: join(claudeHome(), "skills"),
+    claudeCommands: join(claudeHome(), "commands"),
     instructions: agents.filter((a) => a.globalInstructionsFile).map((a) => ({ path: a.globalInstructionsFile!, tag: a.tag })),
     universalSkills: join(home, UNIVERSAL_SKILLS_DIR),
     agentSkills: agents.filter((a) => a.globalSkillsDir).map((a) => a.globalSkillsDir!),
+    agentCommands: agents.filter((a) => a.globalCommandsDir).map((a) => a.globalCommandsDir!),
   };
 }
 
@@ -107,6 +116,7 @@ function main(): void {
   const isCheck = argv.includes("-c") || argv.includes("--check");
   const isGlobal = argv.includes("-g") || argv.includes("--global");
   const adopt = argv.includes("--adopt");
+  const commandsToSkills = argv.includes("--commands-to-skills");
   const all = argv.includes("--all");
   const agentsIdx = Math.max(argv.indexOf("-a"), argv.indexOf("--agents"));
   const only = agentsIdx !== -1 ? (argv[agentsIdx + 1] ?? "").split(",").filter(Boolean) : undefined;
@@ -126,7 +136,7 @@ function main(): void {
     return;
   }
 
-  const plan = runSync(layout, { dryRun, adopt });
+  const plan = runSync(layout, { dryRun, adopt, commandsToSkills });
   print(plan, dryRun);
   const count = (k: string) => plan.changes.filter((c) => c.kind === k).length;
   const summary = [`${count("symlink")} link(s)`, count("merge") && `${count("merge")} merge(s)`, count("adopt") && `${count("adopt")} adoption(s)`, `${count("conflict")} conflict(s)`].filter(Boolean).join(", ");

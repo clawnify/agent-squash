@@ -26,14 +26,28 @@ export interface InstructionLink {
 export interface Layout {
   claudeMd: string;
   claudeSkills: string;
+  claudeCommands: string;
   instructions: InstructionLink[];
   universalSkills: string;
   /** agent skills dirs that should point at universalSkills */
   agentSkills: string[];
+  /** agent Markdown command dirs that should point at claudeCommands (no universal dir exists) */
+  agentCommands: string[];
+}
+
+export interface SyncOptions {
+  dryRun: boolean;
+  adopt: boolean;
+  /** move .claude/commands/<name>.md into .claude/skills/<name>/SKILL.md so agents without commands get them */
+  commandsToSkills: boolean;
 }
 
 /** Codex stops loading instruction files once the combined chain reaches this. */
 export const CODEX_MAX_BYTES = 32 * 1024;
+/** OpenCode and Cursor require this shape; OpenCode also requires the name to equal the directory. */
+const SKILL_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+/** Codex rejects longer skill names. */
+const SKILL_NAME_MAX = 64;
 
 export const PREAMBLE =
   "> Sections wrapped in an agent tag — `<claude>`, `<opencode>`, `<codex>`, … — apply only to that agent. Untagged text applies to every agent.";
@@ -84,6 +98,32 @@ function link(linkPath: string, target: string): void {
   makeSymlink(relative(dirname(linkPath), target), linkPath, resolve(target));
 }
 
+/**
+ * Minimal front matter reader: the `key: value` lines between a leading `---` and the next `---`.
+ * Enough for name/description/model checks without a YAML dependency. Returns undefined when the
+ * file has no front matter, null when it opens one and never closes it.
+ */
+export function frontmatter(content: string): Record<string, string> | undefined | null {
+  if (!content.startsWith("---\n") && !content.startsWith("---\r\n")) return undefined;
+  const end = content.indexOf("\n---", 3);
+  if (end === -1) return null;
+  const out: Record<string, string> = {};
+  for (const line of content.slice(4, end).split("\n")) {
+    const i = line.indexOf(":");
+    if (i > 0) out[line.slice(0, i).trim()] = line.slice(i + 1).trim().replace(/^["']|["']$/g, "");
+  }
+  return out;
+}
+
+/** Add `key: value` to the front matter, creating one if needed. Leaves an existing key alone. */
+function withFrontmatter(content: string, key: string, value: string): string {
+  const fm = frontmatter(content);
+  if (fm === undefined) return `---\n${key}: ${value}\n---\n\n${content}`;
+  if (fm === null || key in fm) return content;
+  const end = content.indexOf("\n---", 3);
+  return `${content.slice(0, end)}\n${key}: ${value}${content.slice(end)}`;
+}
+
 /** True when both paths are files with equal bytes, or dirs whose entries are recursively the same. */
 function sameTree(a: string, b: string): boolean {
   const sa = lstatSync(a);
@@ -97,10 +137,10 @@ function sameTree(a: string, b: string): boolean {
 }
 
 /**
- * Move the skills inside a real dir into the canonical dir, then remove the (now empty) real dir
- * so it can become a symlink. Entries that are already symlinks into the canonical dir are
- * redundant and simply removed, as is an entry identical to what the canonical dir already holds.
- * Any other name collision aborts the whole adoption (nothing moved).
+ * Move the entries of a real dir into the canonical dir, then remove the (now empty) real dir so it
+ * can become a symlink. Entries that are already symlinks into the canonical dir are redundant and
+ * simply removed, as is an entry identical to what the canonical dir already holds. Any other name
+ * collision aborts the whole adoption (nothing moved).
  */
 function adoptDir(realDir: string, canonical: string, dryRun: boolean, changes: Change[]): boolean {
   const canonicalAbs = resolve(canonical);
@@ -130,7 +170,7 @@ function adoptDir(realDir: string, canonical: string, dryRun: boolean, changes: 
   }
   for (const e of duplicates) {
     if (!dryRun) rmSync(join(realDir, e), { recursive: true });
-    changes.push({ kind: "adopt", path: join(realDir, e), detail: "identical copy of the canonical skill — removed" });
+    changes.push({ kind: "adopt", path: join(realDir, e), detail: "identical copy of the canonical entry — removed" });
   }
   for (const e of toMove) {
     if (!dryRun) renameSync(join(realDir, e), join(canonical, e));
@@ -204,20 +244,55 @@ function mergeInstructions(claudeMd: string, incoming: InstructionLink, dryRun: 
 }
 
 /**
+ * Turn flat .claude/commands/<name>.md files into .claude/skills/<name>/SKILL.md so agents that
+ * only read skills (Gemini, Codex in a repo, Amp, Copilot) get them too. Claude Code invokes both
+ * as /<name>; `disable-model-invocation: true` keeps the command user-triggered as before.
+ * Nested commands are left alone: their names differ per agent (/a:b vs a/b), so flatten first.
+ */
+function commandsToSkills(commandsDir: string, skillsDir: string, dryRun: boolean, changes: Change[]): void {
+  if (!existsSync(commandsDir)) return;
+  for (const e of readdirSync(commandsDir).sort()) {
+    const p = join(commandsDir, e);
+    if (isRealDir(p)) {
+      changes.push({ kind: "skip", path: p, detail: "nested commands are not converted (names differ across agents) — flatten first" });
+      continue;
+    }
+    if (!e.endsWith(".md") || e.startsWith(".")) continue;
+    const name = e.slice(0, -3);
+    if (!SKILL_NAME.test(name)) {
+      changes.push({ kind: "skip", path: p, detail: `skill names must match ${SKILL_NAME} — rename first` });
+      continue;
+    }
+    const dest = join(skillsDir, name);
+    if (existsSync(dest)) {
+      changes.push({ kind: "conflict", path: p, detail: `skill ${name} already exists — command left in place (the skill wins in Claude Code anyway)` });
+      continue;
+    }
+    if (!dryRun) {
+      mkdirSync(dest, { recursive: true });
+      writeFileSync(join(dest, "SKILL.md"), withFrontmatter(readFileSync(p, "utf8"), "disable-model-invocation", "true"));
+      rmSync(p);
+    }
+    changes.push({ kind: "adopt", path: p, detail: `converted -> ${join(dest, "SKILL.md")} (still user-invoked only)` });
+  }
+}
+
+/**
  * Compute (and optionally apply) the sync for one scope.
  *
- * CLAUDE.md and .claude/skills are the real files. Everything else is a symlink into them:
+ * CLAUDE.md, .claude/skills and .claude/commands are the real files. Everything else is a symlink:
  *
  *   AGENTS.md / GEMINI.md / ~/.config/opencode/AGENTS.md / …  -> CLAUDE.md
  *   .agents/skills                                             -> .claude/skills
  *   <agent>/skills                                             -> .agents/skills
+ *   <agent>/commands                                           -> .claude/commands
  *
  * The only write into CLAUDE.md is the one-time merge of a real vendor instructions file.
  */
-export function runSync(layout: Layout, opts: { dryRun: boolean; adopt: boolean }): Plan {
+export function runSync(layout: Layout, opts: SyncOptions): Plan {
   const changes: Change[] = [];
   const { dryRun, adopt } = opts;
-  const { claudeMd, claudeSkills, instructions, universalSkills, agentSkills } = layout;
+  const { claudeMd, claudeSkills, claudeCommands, instructions, universalSkills, agentSkills, agentCommands } = layout;
 
   if (existsSync(claudeMd)) {
     for (const ins of instructions) {
@@ -235,6 +310,8 @@ export function runSync(layout: Layout, opts: { dryRun: boolean; adopt: boolean 
     changes.push({ kind: "skip", path: claudeMd, detail: "not found — nothing to link instructions to" });
   }
 
+  if (opts.commandsToSkills) commandsToSkills(claudeCommands, claudeSkills, dryRun, changes);
+
   if (existsSync(claudeSkills)) {
     ensureSymlink(universalSkills, claudeSkills, dryRun, changes, adopt);
     for (const dir of agentSkills) ensureSymlink(dir, universalSkills, dryRun, changes, adopt);
@@ -242,6 +319,12 @@ export function runSync(layout: Layout, opts: { dryRun: boolean; adopt: boolean 
     changes.push({ kind: "skip", path: universalSkills, detail: "no .claude/skills; .agents/skills already real (universal-first setup)" });
   } else {
     changes.push({ kind: "skip", path: universalSkills, detail: "no skills found" });
+  }
+
+  if (existsSync(claudeCommands)) {
+    for (const dir of agentCommands) ensureSymlink(dir, claudeCommands, dryRun, changes, adopt);
+  } else if (agentCommands.length) {
+    changes.push({ kind: "skip", path: claudeCommands, detail: "no commands found" });
   }
   return { changes };
 }
@@ -289,9 +372,65 @@ export function lintInstructions(content: string, path: string): CheckResult {
   return { errors, warnings };
 }
 
-/** Verify every expected link is in place and the instructions file is well-formed. */
+/**
+ * Portability warnings for skills: what Claude Code tolerates but other agents silently drop.
+ * shortcut: warnings only, so an existing library keeps passing --check; add --strict if CI needs to fail on these.
+ */
+export function lintSkills(skillsDir: string): string[] {
+  const warnings: string[] = [];
+  if (!existsSync(skillsDir)) return warnings;
+  for (const e of readdirSync(skillsDir).sort()) {
+    if (e.startsWith(".")) continue;
+    const dir = join(skillsDir, e);
+    if (!statSync(dir).isDirectory()) {
+      warnings.push(`${dir}: not a directory — agents expect <name>/SKILL.md`);
+      continue;
+    }
+    const skillMd = join(dir, "SKILL.md");
+    if (!existsSync(skillMd)) {
+      warnings.push(`${dir}: no SKILL.md — skipped by every agent`);
+      continue;
+    }
+    if (!SKILL_NAME.test(e)) warnings.push(`${dir}: name must match ${SKILL_NAME} for OpenCode and Cursor`);
+    if (e.length > SKILL_NAME_MAX) warnings.push(`${dir}: name longer than ${SKILL_NAME_MAX} chars — Codex rejects it`);
+    const fm = frontmatter(readFileSync(skillMd, "utf8"));
+    if (fm === undefined) {
+      warnings.push(`${skillMd}: must start with --- front matter — Codex and OpenCode skip it otherwise`);
+      continue;
+    }
+    if (fm === null) {
+      warnings.push(`${skillMd}: front matter is never closed`);
+      continue;
+    }
+    if (!fm.name) warnings.push(`${skillMd}: no name — OpenCode requires name: ${e}`);
+    else if (fm.name !== e) warnings.push(`${skillMd}: name "${fm.name}" must equal the directory name for OpenCode`);
+    if (!fm.description) warnings.push(`${skillMd}: no description — OpenCode and Codex skip it`);
+  }
+  return warnings;
+}
+
+/** Portability warnings for Markdown commands shared with OpenCode, Codex, and Cursor. */
+export function lintCommands(commandsDir: string): string[] {
+  const warnings: string[] = [];
+  if (!existsSync(commandsDir)) return warnings;
+  for (const e of readdirSync(commandsDir).sort()) {
+    if (e.startsWith(".")) continue;
+    const p = join(commandsDir, e);
+    if (statSync(p).isDirectory()) {
+      warnings.push(`${p}: nested commands are named /${e}:<name> in Claude Code but ${e}/<name> in OpenCode — flatten for consistency`);
+      continue;
+    }
+    if (!e.endsWith(".md")) continue;
+    const fm = frontmatter(readFileSync(p, "utf8"));
+    if (fm === null) warnings.push(`${p}: front matter is never closed`);
+    else if (fm?.model && !fm.model.includes("/")) warnings.push(`${p}: model "${fm.model}" is a Claude alias — OpenCode expects provider/model and fails at run time`);
+  }
+  return warnings;
+}
+
+/** Verify every expected link is in place and the shared files are well-formed. */
 export function check(layout: Layout): CheckResult {
-  const { claudeMd, claudeSkills, instructions, universalSkills, agentSkills } = layout;
+  const { claudeMd, claudeSkills, claudeCommands, instructions, universalSkills, agentSkills, agentCommands } = layout;
   const result: CheckResult = { errors: [], warnings: [] };
   const pairs: Array<[string, string]> = [];
   if (existsSync(claudeMd)) {
@@ -303,6 +442,11 @@ export function check(layout: Layout): CheckResult {
   if (existsSync(claudeSkills)) {
     pairs.push([universalSkills, claudeSkills]);
     for (const dir of agentSkills) pairs.push([dir, universalSkills]);
+    result.warnings.push(...lintSkills(claudeSkills));
+  }
+  if (existsSync(claudeCommands)) {
+    for (const dir of agentCommands) pairs.push([dir, claudeCommands]);
+    result.warnings.push(...lintCommands(claudeCommands));
   }
   for (const [l, target] of pairs) {
     if (!isCorrectSymlink(l, target)) result.errors.push(`${l} (expected -> ${target})`);
