@@ -31,6 +31,8 @@ function homeFixture() {
   mkdirSync(join(home, ".config/opencode"), { recursive: true });
   writeFileSync(join(home, ".config/opencode/AGENTS.md"), "## Ask the help subagent\n\nUse the `help` subagent before guessing.\n");
   mkdirSync(join(home, ".codex"), { recursive: true });
+  mkdirSync(join(home, ".claude/commands"), { recursive: true });
+  writeFileSync(join(home, ".claude/commands/ship.md"), "---\ndescription: ship it\n---\nShip $ARGUMENTS\n");
   return home;
 }
 
@@ -151,7 +153,7 @@ test("gemini: GEMINI.md links to CLAUDE.md; a real one is merged under <gemini> 
   writeFileSync(join(root, "GEMINI.md"), "Use gemini-specific tool X.\n");
   run([root, "-a", "gemini"]);
   assert.equal(readlinkSync(join(root, "GEMINI.md")), "CLAUDE.md");
-  assert.equal(readlinkSync(join(root, ".gemini/skills")), join("..", ".agents", "skills"));
+  assert.equal(existsSync(join(root, ".gemini/skills")), false, "Gemini reads .agents/skills natively — no link");
   const claude = readFileSync(join(root, "CLAUDE.md"), "utf8");
   assert.ok(claude.startsWith("> Sections wrapped in an agent tag"), "preamble inserted at top");
   assert.match(claude, /\n<gemini>\nUse gemini-specific tool X\.\n<\/gemini>\n$/);
@@ -171,6 +173,9 @@ test("global scope: per-agent global files link to ~/.claude/CLAUDE.md, OpenCode
   assert.match(claude, /<opencode>\n## Ask the help subagent\n\nUse the `help` subagent before guessing\.\n<\/opencode>\n$/);
   assert.equal(readFileSync(join(home, ".config/opencode/AGENTS.md.bak"), "utf8"), "## Ask the help subagent\n\nUse the `help` subagent before guessing.\n");
   assert.equal(readFileSync(join(home, ".codex/AGENTS.md"), "utf8"), claude, "codex sees the same file");
+  assert.equal(readlinkSync(join(home, ".config/opencode/commands")), join("..", "..", ".claude", "commands"));
+  assert.equal(readlinkSync(join(home, ".codex/prompts")), join("..", ".claude", "commands"));
+  assert.equal(readFileSync(join(home, ".codex/prompts/ship.md"), "utf8"), "---\ndescription: ship it\n---\nShip $ARGUMENTS\n");
   const chk = run(["-g", "-c"], { home });
   assert.equal(chk.code, 0, chk.out);
 });
@@ -208,4 +213,58 @@ test("-c lints agent tags: unclosed, unknown, or missing preamble fail; valid pa
   r = run([root, "-c"]);
   assert.equal(r.code, 0, "size is a warning, not drift");
   assert.match(r.out, /Codex stops loading/);
+});
+
+test("commands: agent command dirs link to .claude/commands; --commands-to-skills converts flat ones", () => {
+  const root = fixture("c1");
+  mkdirSync(join(root, ".claude/commands/git"), { recursive: true });
+  writeFileSync(join(root, ".claude/commands/deploy.md"), "---\ndescription: deploy\nargument-hint: [env]\n---\nDeploy to $ARGUMENTS\n");
+  writeFileSync(join(root, ".claude/commands/plain.md"), "No front matter here\n");
+  writeFileSync(join(root, ".claude/commands/git/commit.md"), "nested\n");
+  writeFileSync(join(root, ".claude/commands/foo.md"), "---\ndescription: clashes with skill foo\n---\nx\n");
+
+  run([root, "-a", "opencode,cursor"]);
+  assert.equal(readlinkSync(join(root, ".opencode/commands")), join("..", ".claude", "commands"));
+  assert.equal(readlinkSync(join(root, ".cursor/commands")), join("..", ".claude", "commands"));
+  assert.equal(readFileSync(join(root, ".opencode/commands/deploy.md"), "utf8").includes("Deploy to $ARGUMENTS"), true);
+  const chk = run([root, "-c", "-a", "opencode,cursor"]);
+  assert.equal(chk.code, 0, chk.out);
+  assert.match(chk.out, /git: nested commands/);
+
+  const conv = run([root, "-a", "opencode", "--commands-to-skills"]);
+  assert.equal(conv.code, 1, "clash with an existing skill is a conflict");
+  assert.match(conv.out, /foo\.md: skill foo already exists/);
+  assert.match(conv.out, /git: nested commands are not converted/);
+  assert.equal(readFileSync(join(root, ".claude/skills/deploy/SKILL.md"), "utf8"), "---\ndescription: deploy\nargument-hint: [env]\ndisable-model-invocation: true\n---\nDeploy to $ARGUMENTS\n");
+  assert.equal(readFileSync(join(root, ".claude/skills/plain/SKILL.md"), "utf8"), "---\ndisable-model-invocation: true\n---\n\nNo front matter here\n");
+  assert.equal(existsSync(join(root, ".claude/commands/deploy.md")), false, "converted command is moved, not copied");
+  assert.equal(existsSync(join(root, ".claude/commands/foo.md")), true, "clashing command left in place");
+  assert.equal(readFileSync(join(root, ".agents/skills/deploy/SKILL.md"), "utf8").includes("Deploy to"), true, "reaches skills-only agents");
+});
+
+test("-c warns on skills and commands other agents would drop", () => {
+  const root = fixture("l2");
+  writeFileSync(join(root, ".claude/skills/foo/SKILL.md"), "---\nname: foo\ndescription: fine\n---\nok\n");
+  mkdirSync(join(root, ".claude/skills/Bad_Name"));
+  writeFileSync(join(root, ".claude/skills/Bad_Name/SKILL.md"), "no front matter\n");
+  mkdirSync(join(root, ".claude/skills/noname"));
+  writeFileSync(join(root, ".claude/skills/noname/SKILL.md"), "---\ndescription: d\n---\n");
+  mkdirSync(join(root, ".claude/skills/wrongname"));
+  writeFileSync(join(root, ".claude/skills/wrongname/SKILL.md"), "---\nname: other\n---\n");
+  mkdirSync(join(root, ".claude/skills/empty"));
+  mkdirSync(join(root, ".claude/commands"));
+  writeFileSync(join(root, ".claude/commands/alias.md"), "---\nmodel: opus\n---\nx\n");
+  writeFileSync(join(root, ".claude/commands/ok.md"), "---\nmodel: openrouter/anthropic/claude-opus-5\n---\nx\n");
+  run([root]);
+  const r = run([root, "-c"]);
+  assert.equal(r.code, 0, "portability problems are warnings, not drift");
+  assert.match(r.out, /Bad_Name: name must match/);
+  assert.match(r.out, /Bad_Name\/SKILL\.md: must start with --- front matter/);
+  assert.match(r.out, /noname\/SKILL\.md: no name — OpenCode requires name: noname/);
+  assert.match(r.out, /wrongname\/SKILL\.md: name "other" must equal/);
+  assert.match(r.out, /wrongname\/SKILL\.md: no description/);
+  assert.match(r.out, /empty: no SKILL\.md/);
+  assert.match(r.out, /alias\.md: model "opus" is a Claude alias/);
+  assert.doesNotMatch(r.out, /ok\.md/);
+  assert.doesNotMatch(r.out, /foo\/SKILL\.md/);
 });

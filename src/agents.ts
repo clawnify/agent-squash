@@ -16,6 +16,10 @@ export interface AgentConfig {
   instructionsFile?: string;
   /** absolute global instructions file needing a symlink to ~/.claude/CLAUDE.md */
   globalInstructionsFile?: string;
+  /** repo-relative dir of Markdown slash commands, linked to .claude/commands; undefined = no Markdown commands */
+  commandsDir?: string;
+  /** absolute global dir of Markdown slash commands, linked to ~/.claude/commands */
+  globalCommandsDir?: string;
 }
 
 const home = homedir();
@@ -33,16 +37,19 @@ export function claudeHome(): string {
  * vercel-labs/skills registry — never added from memory (see AGENTS.md).
  *
  *   opencode   https://opencode.ai/docs/rules  https://opencode.ai/docs/skills
+ *             commands: sst/opencode packages/opencode/src/config/command.ts scans command/ and commands/ recursively for .md files
  *   codex      https://learn.chatgpt.com/docs/agent-configuration/agents-md  …/build-skills
- *   gemini-cli https://geminicli.com/docs/cli/gemini-md/
+ *             prompts (deprecated, global only): https://learn.chatgpt.com/docs/custom-prompts
+ *   gemini-cli https://geminicli.com/docs/cli/gemini-md/  skills: https://geminicli.com/docs/cli/skills/ (reads .agents/skills natively; commands are TOML)
+ *   cursor     https://cursor.com/changelog/1-6 (.cursor/commands/*.md)  https://cursor.com/docs/context/skills (~/.cursor/skills)
  */
 export const AGENTS: AgentConfig[] = [
   { name: "claude-code", displayName: "Claude Code", tag: "claude", skillsDir: ".claude/skills", globalSkillsDir: join(claudeHome(), "skills"), instructionsFile: "CLAUDE.md" },
   // Read AGENTS.md + .agents/skills in repos, but have their own global instructions file.
-  { name: "opencode", displayName: "OpenCode", tag: "opencode", detect: [join(home, ".opencode"), join(home, ".config/opencode")], globalInstructionsFile: join(home, ".config/opencode/AGENTS.md") },
-  { name: "codex", displayName: "Codex", tag: "codex", globalInstructionsFile: join(home, ".codex/AGENTS.md") },
-  // Reads GEMINI.md, not AGENTS.md.
-  { name: "gemini-cli", displayName: "Gemini CLI", tag: "gemini", skillsDir: ".gemini/skills", globalSkillsDir: join(home, ".gemini/skills"), instructionsFile: "GEMINI.md", globalInstructionsFile: join(home, ".gemini/GEMINI.md") },
+  { name: "opencode", displayName: "OpenCode", tag: "opencode", detect: [join(home, ".opencode"), join(home, ".config/opencode")], globalInstructionsFile: join(home, ".config/opencode/AGENTS.md"), commandsDir: ".opencode/commands", globalCommandsDir: join(home, ".config/opencode/commands") },
+  { name: "codex", displayName: "Codex", tag: "codex", globalInstructionsFile: join(home, ".codex/AGENTS.md"), globalCommandsDir: join(home, ".codex/prompts") },
+  // Reads GEMINI.md, not AGENTS.md. Reads .agents/skills natively (dedupes by name). Commands are TOML, so none.
+  { name: "gemini-cli", displayName: "Gemini CLI", tag: "gemini", instructionsFile: "GEMINI.md", globalInstructionsFile: join(home, ".gemini/GEMINI.md") },
   // Long-tail agents with their own skills dir (vercel-labs/skills registry).
   { name: "goose", displayName: "Goose", tag: "goose", skillsDir: ".goose/skills", globalSkillsDir: join(home, ".config/goose/skills") },
   { name: "droid", displayName: "Droid (Factory)", tag: "droid", skillsDir: ".factory/skills", globalSkillsDir: join(home, ".factory/skills") },
@@ -60,7 +67,7 @@ export const AGENTS: AgentConfig[] = [
   { name: "hermes-agent", displayName: "Hermes Agent", tag: "hermes", skillsDir: ".hermes/skills", globalSkillsDir: join(home, ".hermes/skills") },
   { name: "aider-desk", displayName: "AiderDesk", tag: "aider", skillsDir: ".aider-desk/skills", globalSkillsDir: join(home, ".aider-desk/skills") },
   // Fully universal: AGENTS.md + .agents/skills, nothing to link. Listed so their tag is valid.
-  { name: "cursor", displayName: "Cursor", tag: "cursor" },
+  { name: "cursor", displayName: "Cursor", tag: "cursor", detect: [join(home, ".cursor")], commandsDir: ".cursor/commands" },
   { name: "copilot", displayName: "GitHub Copilot", tag: "copilot" },
   { name: "amp", displayName: "Amp", tag: "amp" },
   { name: "zed", displayName: "Zed", tag: "zed" },
@@ -71,7 +78,7 @@ export const AGENTS: AgentConfig[] = [
 
 /** Agents that need at least one symlink somewhere (selectable with -a / --all). */
 export const LINKED_AGENTS = AGENTS.filter(
-  (a) => a.name !== "claude-code" && (a.skillsDir || a.globalSkillsDir || a.instructionsFile || a.globalInstructionsFile)
+  (a) => a.name !== "claude-code" && (a.skillsDir || a.globalSkillsDir || a.instructionsFile || a.globalInstructionsFile || a.commandsDir || a.globalCommandsDir)
 );
 
 export const KNOWN_TAGS = AGENTS.map((a) => a.tag);
