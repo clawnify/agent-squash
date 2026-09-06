@@ -88,6 +88,25 @@ tag; a repo-root `AGENTS.md` has no single owner, so it is appended untagged
 for you to review. The original is kept as `.bak`. This is the only write
 agent-squash ever makes into `CLAUDE.md`.
 
+## What about memory?
+
+"Memory" is three different things, and agent-squash shares exactly one of them.
+
+- **Curated memory**: rules, skills, commands. Plain files a human edits. This is
+  what agent-squash links, and it works because every harness reads Markdown from
+  a path.
+- **Episodic memory**: what an agent learned on its own. Claude Code keeps Markdown
+  under `~/.claude/projects/<project>/memory/`, Codex keeps SQLite, Cursor keeps it
+  in the cloud, OpenCode has none. Different stores, each written by its own
+  harness, none readable by another. Not a symlink problem, so agent-squash leaves it alone.
+- **A memory service**: an MCP server exposing remember and recall tools. Every
+  harness that speaks MCP shares it, reads and writes included. This is the actual
+  "global memory layer." Each harness has its own MCP config format and its own
+  `mcp add` command, so you add the server once per harness, by hand.
+
+For notes a whole team should share, keep a Markdown file in the repo and point to
+it from `AGENTS.md`. That is curated memory, and it reaches everyone already.
+
 ## Usage
 
 ```bash
